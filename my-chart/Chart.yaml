@@ -1,5 +1,5 @@
 apiVersion: v2
-name: gameplay-mcp
+name: mcp-gateway          # chart name (fine if directory is my-chart)
 description: Gameplay MCP gateway service (FastAPI) exposed via thehive.tib.ad.ea.com
 type: application
 version: 0.1.0

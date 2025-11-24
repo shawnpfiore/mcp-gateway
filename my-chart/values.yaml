@@ -3,8 +3,7 @@ namespace: ea
 replicaCount: 1
 
 image:
-  # TODO: update this to your real image repo
-  repository: registry.example.com/mcp/gameplay-mcp
+  repository: sfiore915/mcp-gateway
   tag: latest
   pullPolicy: IfNotPresent
 
@@ -14,7 +13,6 @@ service:
   port: 8000
   targetPort: 8000
 
-# Env vars for FastAPI MCP server
 env:
   - name: P4DIFF_BASE_URL
     value: "https://p4streamdiff.tib.ad.ea.com/api/test"
@@ -23,18 +21,18 @@ env:
   - name: MCP_AUTH_TOKEN
     valueFrom:
       secretKeyRef:
-        name: gameplay-mcp-secret
+        name: mcp-gateway-secret
         key: auth_token
 
 persistence:
-  enabled: false  # MCP gateway doesn’t need storage (set true later if you add state)
+  enabled: false
   accessMode: ReadWriteOnce
   size: 1Gi
   storageClassName: ""
 
 serviceAccount:
   create: true
-  name: ""  # let Helm generate
+  name: ""
 
 ingress:
   enabled: true
@@ -61,7 +59,6 @@ autoscaling:
   targetCPUUtilizationPercentage: 80
 
 resources: {}
-
 nodeSelector: {}
 tolerations: []
 affinity: {}

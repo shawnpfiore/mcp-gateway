@@ -1,2 +1,20 @@
+# Docker commands
 docker-compose up --build
+docker build -t sfiore915/mcp-gateway:latest .
+docker push sfiore915/mcp-gateway:latest
+
+
+
 curl http://localhost:8000/healthz
+
+
+# need to do this on the cluster
+kubectl create secret generic mcp-gateway-secret \
+  -n ea \
+  --from-literal=auth_token=dev-test-token
+
+
+#Helm commands
+helm package .\my-chart\
+helm upgrade --install mcp-gateway mcp-gateway-0.1.0.tgz -n ea --create-namespace
+helm install mcp-gateway mcp-gateway-0.1.0.tgz --namespace ea --create-namespace

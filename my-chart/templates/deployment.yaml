@@ -1,22 +1,24 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "gameplay-mcp.fullname" . }}
+  name: {{ include "mcp-gateway.fullname" . }}
   labels:
-    app: {{ include "gameplay-mcp.name" . }}
+    {{- include "mcp-gateway.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
-      app: {{ include "gameplay-mcp.name" . }}
+      app.kubernetes.io/name: {{ include "mcp-gateway.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
   template:
     metadata:
       labels:
-        app: {{ include "gameplay-mcp.name" . }}
+        app.kubernetes.io/name: {{ include "mcp-gateway.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
-      serviceAccountName: {{ include "gameplay-mcp.serviceAccountName" . }}
+      serviceAccountName: {{ include "mcp-gateway.serviceAccountName" . }}
       containers:
-        - name: gameplay-mcp
+        - name: mcp-gateway
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
