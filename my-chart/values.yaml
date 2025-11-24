@@ -1,0 +1,67 @@
+namespace: ea
+
+replicaCount: 1
+
+image:
+  # TODO: update this to your real image repo
+  repository: registry.example.com/mcp/gameplay-mcp
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  name: gameplay-mcp
+  type: ClusterIP
+  port: 8000
+  targetPort: 8000
+
+# Env vars for FastAPI MCP server
+env:
+  - name: P4DIFF_BASE_URL
+    value: "https://p4streamdiff.tib.ad.ea.com/api/test"
+  - name: SPRINT_INSIGHTS_BASE_URL
+    value: "https://sprintinsightsapp.tib.ad.ea.com/api/test"
+  - name: MCP_AUTH_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: gameplay-mcp-secret
+        key: auth_token
+
+persistence:
+  enabled: false  # MCP gateway doesn’t need storage (set true later if you add state)
+  accessMode: ReadWriteOnce
+  size: 1Gi
+  storageClassName: ""
+
+serviceAccount:
+  create: true
+  name: ""  # let Helm generate
+
+ingress:
+  enabled: true
+  ingressClassName: traefik
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    traefik.ingress.kubernetes.io/custom-request-headers: |
+      X-Forwarded-Proto: https
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+  hosts:
+    - host: thehive.tib.ad.ea.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - hosts:
+        - thehive.tib.ad.ea.com
+      secretName: thehive-local-tls
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 80
+
+resources: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -1,0 +1,11 @@
+version: "3.9"
+
+services:
+  gameplay-mcp:
+    build: .
+    container_name: gameplay-mcp
+    ports:
+      - "8800:8000"
+    env_file:
+      - .env
+    restart: unless-stopped
