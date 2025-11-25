@@ -113,13 +113,17 @@ async def get_sprint_metrics(sprint_name: str) -> Dict[str, Any]:
 
 
 # -------------------------------------------------------------------
-# ASGI app for uvicorn / K8s (Streamable HTTP MCP)
+# ASGI app for uvicorn / K8s (SSE MCP)
 # -------------------------------------------------------------------
 
-# This exposes a Streamable HTTP MCP server with:
-#   - MCP endpoint at /mcp
+# This exposes an SSE MCP server with:
+#   - SSE endpoint at /sse
+#   - Messages endpoint at /messages/
 #   - Health check at /healthz
-app = mcp.streamable_http_app()
+app = mcp.sse_app()
+# In your FastMCP version, sse_app() defaults to /sse and /messages/
+# We don't pass path/message_path to avoid version mismatch issues.
 
 # For local dev:
 #   uvicorn server:app --host 0.0.0.0 --port 8000
+

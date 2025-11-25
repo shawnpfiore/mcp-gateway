@@ -1,0 +1,27 @@
+{
+  "mcpServers": {
+    "gameplay-mcp-local": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "http://localhost:8800/sse",
+        "--transport",
+        "sse-only"
+      ]
+    },
+    "gameplay-mcp-remote": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "https://thehive.tib.ad.ea.com/sse",
+        "--transport",
+        "sse-only"
+      ],
+      "env": {
+        "NODE_EXTRA_CA_CERTS": "E:\\EA Gitlab\\mcp-gateway\\thehive-cert-chain.pem"
+      }
+    }
+  }
+}
