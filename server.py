@@ -1,137 +1,125 @@
 import os
-from typing import Any, Dict, Optional
+from typing import Dict, Any
 
 import httpx
-from fastapi import FastAPI, Header, HTTPException
-from pydantic import BaseModel
+from mcp.server.fastmcp import FastMCP
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
-app = FastAPI(
-    title="Gameplay MCP Server",
-    version="0.1.0",
-    description="MCP gateway for Gameplay tools (P4Diff, SprintInsights, etc.)",
+# -------------------------------------------------------------------
+# Config from environment
+# -------------------------------------------------------------------
+
+P4DIFF_BASE_URL = os.getenv("P4DIFF_BASE_URL", "https://p4streamdiff.tib.ad.ea.com")
+SPRINT_INSIGHTS_BASE_URL = os.getenv("SPRINT_INSIGHTS_BASE_URL", "https://sprintinsightsapp.tib.ad.ea.com")
+
+# -------------------------------------------------------------------
+# MCP server definition
+# -------------------------------------------------------------------
+
+# json_response=True => tools return plain JSON
+# stateless_http=True => good for K8s / scaling
+mcp = FastMCP(
+    "Gameplay MCP Gateway",
+    json_response=True,
+    stateless_http=True,
 )
 
-# ---- Config from environment ----
+# ---- Health check route for Kubernetes ----
+# This is a normal HTTP endpoint, not an MCP tool.
+@mcp.custom_route("/healthz", ["GET"])
+async def healthz(request: Request):
+    return JSONResponse({"status": "ok"})
 
-P4DIFF_BASE_URL = os.getenv("P4DIFF_BASE_URL", "http://localhost:9001")
-SPRINT_INSIGHTS_BASE_URL = os.getenv("SPRINT_INSIGHTS_BASE_URL", "http://localhost:9002")
-MCP_AUTH_TOKEN = os.getenv("MCP_AUTH_TOKEN")  # optional – if not set, auth is disabled
 
-
-# ---- Simple auth helper ----
-
-def verify_auth(authorization: Optional[str]) -> None:
+# ---- Tool 1: get_p4_stream_summary --------------------------------
+@mcp.tool()
+async def get_p4_stream_summary(stream: str) -> Dict[str, Any]:
     """
-    If MCP_AUTH_TOKEN is set, require Authorization: Bearer <token>.
-    If not set, auth is effectively disabled (for local dev).
+    Get summary stats for a single Perforce stream from P4StreamDiff.
+
+    Args:
+        stream: Perforce depot path, e.g. "//Game/Football/dev/ML"
+
+    Returns:
+        {
+          "ok": True/False,
+          "data": { ... } or
+          "error": "message"
+        }
     """
-    if not MCP_AUTH_TOKEN:
-        return
-
-    if not authorization:
-        raise HTTPException(status_code=401, detail="Missing Authorization header")
-
-    expected = f"Bearer {MCP_AUTH_TOKEN}"
-    if authorization != expected:
-        raise HTTPException(status_code=403, detail="Invalid token")
-
-
-# ---- Models for MCP-like tool API ----
-
-class MCPToolRequest(BaseModel):
-    tool: str
-    arguments: Dict[str, Any] = {}
-
-
-class MCPToolResponse(BaseModel):
-    ok: bool
-    result: Optional[Any] = None
-    error: Optional[str] = None
-
-
-# ---- Health check ----
-
-@app.get("/healthz")
-async def healthz():
-    return {"status": "ok"}
-
-
-# ---- Tool dispatcher ----
-
-@app.post("/mcp/tools", response_model=MCPToolResponse)
-async def call_tool(
-    payload: MCPToolRequest,
-    authorization: Optional[str] = Header(default=None),
-):
-    """
-    Generic MCP-style endpoint.
-    Body shape:
-    {
-      "tool": "get_p4_diff",
-      "arguments": { ... }
-    }
-    """
-    verify_auth(authorization)
-
-    tool = payload.tool
-
-    if tool == "get_p4_diff":
-        return await tool_get_p4_diff(payload.arguments)
-    elif tool == "get_sprint_metrics":
-        return await tool_get_sprint_metrics(payload.arguments)
-    else:
-        return MCPToolResponse(ok=False, error=f"Unknown tool: {tool}")
-
-
-# ---- Tool implementations ----
-
-async def tool_get_p4_diff(args: Dict[str, Any]) -> MCPToolResponse:
-    """
-    Calls your P4Diff API to compare two streams or branches.
-    Expected args example:
-      { "stream_a": "//Game/College/26/DL", "stream_b": "//Game/Football/26/DL" }
-    """
-    stream_a = args.get("stream_a")
-    stream_b = args.get("stream_b")
-
-    if not stream_a or not stream_b:
-        return MCPToolResponse(ok=False, error="stream_a and stream_b are required")
-
-    # TODO: update this URL/path to match your actual p4diff API
-    url = f"{P4DIFF_BASE_URL}/api/compare_streams"
+    url = f"{P4DIFF_BASE_URL}/api/stream-summary/"
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.get(url, params={"stream_a": stream_a, "stream_b": stream_b})
+        async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+            resp = await client.get(url, params={"stream": stream})
+            if resp.status_code == 404:
+                return {
+                    "ok": False,
+                    "error": f"Stream not found in P4StreamDiff: {stream}",
+                }
+
             resp.raise_for_status()
             data = resp.json()
-        return MCPToolResponse(ok=True, result=data)
+            return {
+                "ok": True,
+                "data": data,
+            }
     except Exception as e:
-        return MCPToolResponse(ok=False, error=f"p4diff call failed: {e}")
+        return {
+            "ok": False,
+            "error": f"p4streamdiff call failed: {e}",
+        }
 
 
-async def tool_get_sprint_metrics(args: Dict[str, Any]) -> MCPToolResponse:
+# ---- Tool 2: get_sprint_metrics -----------------------------------
+@mcp.tool()
+async def get_sprint_metrics(sprint_name: str) -> Dict[str, Any]:
     """
-    Calls SprintInsights to get metrics for a sprint.
-    Expected args example:
-      { "sprint_name": "Gameplay Sprint 42" }
+    Get metrics for a sprint from SprintInsights.
+
+    Args:
+        sprint_name: Human-readable sprint name, e.g. "Gameplay Sprint 42"
+
+    Returns:
+        {
+          "ok": True/False,
+          "data": { ... } or
+          "error": "message"
+        }
     """
-    sprint_name = args.get("sprint_name")
-
-    if not sprint_name:
-        return MCPToolResponse(ok=False, error="sprint_name is required")
-
-    # TODO: update this URL/path to match your actual SprintInsights API
-    url = f"{SPRINT_INSIGHTS_BASE_URL}/api/sprint_metrics"
+    url = f"{SPRINT_INSIGHTS_BASE_URL}/api/sprint-summary/"
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
             resp = await client.get(url, params={"sprint_name": sprint_name})
+            if resp.status_code == 404:
+                return {
+                    "ok": False,
+                    "error": f"Sprint not found in SprintInsights: {sprint_name}",
+                }
+
             resp.raise_for_status()
             data = resp.json()
-        return MCPToolResponse(ok=True, result=data)
+            return {
+                "ok": True,
+                "data": data,
+            }
     except Exception as e:
-        return MCPToolResponse(ok=False, error=f"SprintInsights call failed: {e}")
+        return {
+            "ok": False,
+            "error": f"SprintInsights call failed: {e}",
+        }
 
 
-# Local dev: uvicorn server:app --host 0.0.0.0 --port 8000
+# -------------------------------------------------------------------
+# ASGI app for uvicorn / K8s (Streamable HTTP MCP)
+# -------------------------------------------------------------------
+
+# This exposes a Streamable HTTP MCP server with:
+#   - MCP endpoint at /mcp
+#   - Health check at /healthz
+app = mcp.streamable_http_app()
+
+# For local dev:
+#   uvicorn server:app --host 0.0.0.0 --port 8000

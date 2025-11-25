@@ -5,7 +5,8 @@ replicaCount: 1
 image:
   repository: sfiore915/mcp-gateway
   tag: latest
-  pullPolicy: IfNotPresent
+  pullPolicy: Always
+
 
 service:
   name: gameplay-mcp
@@ -15,9 +16,9 @@ service:
 
 env:
   - name: P4DIFF_BASE_URL
-    value: "https://p4streamdiff.tib.ad.ea.com/api/test"
+    value: "https://p4streamdiff.tib.ad.ea.com"
   - name: SPRINT_INSIGHTS_BASE_URL
-    value: "https://sprintinsightsapp.tib.ad.ea.com/api/test"
+    value: "https://sprintinsightsapp.tib.ad.ea.com"
   - name: MCP_AUTH_TOKEN
     valueFrom:
       secretKeyRef:
