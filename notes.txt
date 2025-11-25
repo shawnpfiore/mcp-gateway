@@ -1,7 +1,7 @@
 # Docker commands
 docker-compose up --build
-docker build -t sfiore915/mcp-gateway:latest .
-docker push sfiore915/mcp-gateway:latest
+docker build -t sfiore915/mcp-gateway .
+docker push sfiore915/mcp-gateway
 
 
 
@@ -18,3 +18,14 @@ kubectl create secret generic mcp-gateway-secret \
 helm package .\my-chart\
 helm upgrade --install mcp-gateway mcp-gateway-0.1.0.tgz -n ea --create-namespace
 helm install mcp-gateway mcp-gateway-0.1.0.tgz --namespace ea --create-namespace
+
+
+using Claude
+npm install -g mcp-remote
+
+
+openssl pkcs12 \
+  -in thehivetibadeacom.pfx \
+  -nokeys \
+  -out thehive-cert-chain.pem \
+  -legacy
