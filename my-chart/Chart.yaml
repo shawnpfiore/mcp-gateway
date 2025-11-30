@@ -1,6 +1,6 @@
 apiVersion: v2
 name: mcp-gateway          # chart name (fine if directory is my-chart)
-description: Gameplay MCP gateway service (FastAPI) exposed via thehive.tib.ad.ea.com
+description: Gameplay MCP gateway service (FastAPI) exposed via thehive.tib.ad.ea.com #need to update using for MCP
 type: application
 version: 0.1.0
 appVersion: "0.1.0"

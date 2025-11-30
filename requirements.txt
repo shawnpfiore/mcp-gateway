@@ -2,3 +2,4 @@ uvicorn[standard]
 httpx
 mcp
 starlette
+prometheus-client
