@@ -141,19 +141,6 @@ async def check_stream_changelists(stream: str, changelists: list[int]) -> Dict[
     Args:
         stream: Perforce depot path, e.g. "//Game/College/26/DL"
         changelists: List of changelist numbers to check.
-
-    Returns:
-        {
-          "ok": True/False,
-          "data": {
-            "stream": "...",
-            "results": [
-              {"cl_num": 1234, "in_stream": true/false},
-              ...
-            ]
-          } or None
-          "error": "message" (optional)
-        }
     """
     url = f"{P4DIFF_BASE_URL}/api/stream-changelists-membership/"
     cls_param = ",".join(str(c) for c in changelists)
@@ -187,20 +174,6 @@ async def check_stream_changelists(stream: str, changelists: list[int]) -> Dict[
 async def get_stream_changelists(stream: str) -> Dict[str, Any]:
     """
     List all known changelists for a given stream from P4StreamDiff.
-
-    Args:
-        stream: Perforce depot path, e.g. "//Game/College/26/DL"
-
-    Returns:
-        {
-          "ok": True/False,
-          "data": {
-            "stream": "...",
-            "total": N,
-            "changelists": [...]
-          } or None
-          "error": "message" (optional)
-        }
     """
     url = f"{P4DIFF_BASE_URL}/api/stream-changelists/"
 
@@ -233,20 +206,6 @@ async def get_stream_changelists(stream: str) -> Dict[str, Any]:
 async def get_stream_files(stream: str) -> Dict[str, Any]:
     """
     List latest file revisions for a given stream.
-
-    Args:
-        stream: Perforce depot path, e.g. "//Game/College/26/DL"
-
-    Returns:
-        {
-          "ok": True/False,
-          "data": {
-            "stream": "...",
-            "total_files": N,
-            "files": [...]
-          } or None
-          "error": "message" (optional)
-        }
     """
     url = f"{P4DIFF_BASE_URL}/api/stream-files/"
 
@@ -279,16 +238,6 @@ async def get_stream_files(stream: str) -> Dict[str, Any]:
 async def get_changelist_details(changelist: int) -> Dict[str, Any]:
     """
     Get detailed metadata for a single changelist.
-
-    Args:
-        changelist: Changelist number.
-
-    Returns:
-        {
-          "ok": True/False,
-          "data": { ... } or None
-          "error": "message" (optional)
-        }
     """
     url = f"{P4DIFF_BASE_URL}/api/changelist-details/"
 
@@ -321,35 +270,6 @@ async def get_changelist_details(changelist: int) -> Dict[str, Any]:
 async def find_changelist_streams(changelists: list[int]) -> Dict[str, Any]:
     """
     Given a list of changelist numbers, find which streams they belong to.
-
-    Args:
-        changelists: List of CL numbers, e.g. [8402852, 8402853]
-
-    Returns:
-        {
-          "ok": True/False,
-          "data": {
-            "results": [
-              {
-                "cl_num": 8402852,
-                "streams": [
-                  {
-                    "stream": "//Game/College/26/DL",
-                    "commit_date_time": "...",
-                    "tags": [...],
-                    "title": [...]
-                  },
-                  ...
-                ]
-              },
-              {
-                "cl_num": 9999999,
-                "streams": []
-              }
-            ]
-          } or None
-          "error": "message" (optional)
-        }
     """
     url = f"{P4DIFF_BASE_URL}/api/changelists-streams/"
     cls_param = ",".join(str(c) for c in changelists)
@@ -452,12 +372,18 @@ async def get_active_jira_sprints() -> Dict[str, Any]:
 # -------------------------------------------------------------------
 
 @mcp.tool()
-async def get_jira_sprint_tasks(sprint_id: str, status_filter: str = "") -> Dict[str, Any]:
+async def get_jira_sprint_tasks(
+    sprint_id: str,
+    status_filter: str = "",
+    limit: int = 200,
+) -> Dict[str, Any]:
     """
     Get tasks for a given Jira sprint from the Jira tasks service.
+
+    limit: max number of tasks to return (default 200, max enforced server-side)
     """
     url = f"{SPRINT_INSIGHTS_BASE_URL}/tasks/api/sprint-tasks/"
-    params = {"sprint_id": sprint_id}
+    params: Dict[str, str] = {"sprint_id": sprint_id, "limit": str(limit)}
     if status_filter:
         params["status"] = status_filter
 
@@ -480,12 +406,21 @@ async def get_jira_sprint_tasks(sprint_id: str, status_filter: str = "") -> Dict
 
 
 @mcp.tool()
-async def get_user_sprint_tasks(sprint_id: str, user_name: str, status_filter: str = "") -> Dict[str, Any]:
+async def get_user_sprint_tasks(
+    sprint_id: str,
+    user_name: str,
+    status_filter: str = "",
+    limit: int = 200,
+) -> Dict[str, Any]:
     """
     Get all tasks and summary stats for a given user in a given sprint.
     """
     url = f"{SPRINT_INSIGHTS_BASE_URL}/tasks/api/sprint-user-tasks/"
-    params = {"sprint_id": sprint_id, "user": user_name}
+    params: Dict[str, str] = {
+        "sprint_id": sprint_id,
+        "user": user_name,
+        "limit": str(limit),
+    }
     if status_filter:
         params["status"] = status_filter
 
@@ -508,14 +443,15 @@ async def get_user_sprint_tasks(sprint_id: str, user_name: str, status_filter: s
 
 
 @mcp.tool()
-async def get_user_sprint_hours(sprint_id: str, user_name: str,) -> Dict[str, Any]:
+async def get_user_sprint_hours(sprint_id: str, user_name: str) -> Dict[str, Any]:
     """
     Get a summary of estimated hours for a user in a sprint.
 
     Uses Task.story_points as hours (your existing convention).
     """
     url = f"{SPRINT_INSIGHTS_BASE_URL}/tasks/api/sprint-user-tasks/"
-    params = {"sprint_id": sprint_id, "user": user_name}
+    # Only need summary, not the full tasks list: ask for 1 row max
+    params = {"sprint_id": sprint_id, "user": user_name, "limit": "1"}
 
     try:
         async with httpx.AsyncClient(timeout=60.0, verify=False) as client:
@@ -549,12 +485,23 @@ async def get_user_sprint_hours(sprint_id: str, user_name: str,) -> Dict[str, An
 
 
 @mcp.tool()
-async def search_jira_tasks(query: str, sprint_id: str = "", user_name: str = "", status_filter: str = "",) -> Dict[str, Any]:
+async def search_jira_tasks(
+    query: str,
+    sprint_id: str = "",
+    user_name: str = "",
+    status_filter: str = "",
+    limit: int = 200,
+    offset: int = 0,
+) -> Dict[str, Any]:
     """
     Search Jira tasks across sprints using the Jira tasks service database.
     """
     url = f"{SPRINT_INSIGHTS_BASE_URL}/tasks/api/search-tasks/"
-    params = {"q": query}
+    params: Dict[str, str] = {
+        "q": query,
+        "limit": str(limit),
+        "offset": str(offset),
+    }
     if sprint_id:
         params["sprint_id"] = sprint_id
     if user_name:
@@ -681,10 +628,6 @@ async def get_initiative_coverage(initiative: str, epic_team: str = "") -> Dict[
     """
     Get coverage for an initiative: how many submitters have experience
     in it, optionally filtered by epic_team.
-
-    Uses:
-      - submitter_experience_by_initiative
-      - initiative_coverage
     """
     metrics_url = f"{SKILL_MATRIX_BASE_URL}/metrics"
 
@@ -707,7 +650,7 @@ async def get_initiative_coverage(initiative: str, epic_team: str = "") -> Dict[
 
     try:
         for family in text_string_to_metric_families(metrics_text):
-            # submitter_experience_by_initiative: count of unique submitters per initiative+team
+            # submitter_experience_by_initiative
             if family.name == "submitter_experience_by_initiative":
                 for sample in family.samples:
                     labels = sample.labels
@@ -720,7 +663,7 @@ async def get_initiative_coverage(initiative: str, epic_team: str = "") -> Dict[
 
                     total_submitters_by_team[team] = sample.value
 
-            # initiative_coverage: pct per submitter
+            # initiative_coverage
             if family.name == "initiative_coverage":
                 for sample in family.samples:
                     labels = sample.labels
@@ -758,8 +701,6 @@ async def find_best_submitters_for_initiative(initiative: str, min_level: int = 
     """
     Find submitters with proficiency >= min_level for a given initiative
     across all epic teams.
-
-    Proficiency levels are the 0-4 mapping from your Skill Matrix.
     """
     metrics_url = f"{SKILL_MATRIX_BASE_URL}/metrics"
 
@@ -798,7 +739,6 @@ async def find_best_submitters_for_initiative(initiative: str, min_level: int = 
                         "proficiency_level": level,
                     })
 
-        # sort by proficiency desc
         candidates.sort(key=lambda c: c["proficiency_level"], reverse=True)
 
         return {
@@ -820,10 +760,6 @@ async def find_best_submitters_for_initiative(initiative: str, min_level: int = 
 async def get_epic_expertise(epic: str) -> Dict[str, Any]:
     """
     Summarize who has experience in a given epic and their proficiency levels.
-
-    Uses:
-      - submitter_experience_by_epic (unique submitters per epic)
-      - proficiency_by_user_epic (per submitter+epic+team)
     """
     metrics_url = f"{SKILL_MATRIX_BASE_URL}/metrics"
 
@@ -887,8 +823,6 @@ async def get_epic_expertise(epic: str) -> Dict[str, Any]:
 async def get_swarm_metrics_raw() -> Dict[str, Any]:
     """
     Get the raw Prometheus metrics text from the Swarm Metrics service.
-
-    Useful for debugging or ad-hoc inspection.
     """
     url = f"{SWARM_METRICS_BASE_URL}/metrics/"
 
@@ -969,10 +903,7 @@ async def get_swarm_group_summary(group: str) -> Dict[str, Any]:
 @mcp.tool()
 async def get_swarm_group_top_contributors(group: str, limit: int = 5) -> Dict[str, Any]:
     """
-    Get top contributors for a Swarm group, based on activity counts
-    (once per review per user, as computed in your metrics).
-
-    Uses the group_top_contributor gauge.
+    Get top contributors for a Swarm group, based on activity counts.
     """
     metrics_url = f"{SWARM_METRICS_BASE_URL}/metrics/"
 
@@ -1070,7 +1001,7 @@ async def get_swarm_group_daily_snapshot(group: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
-async def get_swarm_group_history(group: str, start_date: str, end_date: str,) -> Dict[str, Any]:
+async def get_swarm_group_history(group: str, start_date: str, end_date: str) -> Dict[str, Any]:
     """
     Get per-day Swarm metrics for a group between start_date and end_date.
     """
