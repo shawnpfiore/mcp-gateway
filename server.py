@@ -23,6 +23,49 @@ SWARM_METRICS_BASE_URL = os.getenv(
 )
 
 # -------------------------------------------------------------------
+# Helper functions for Skill Matrix metrics
+# -------------------------------------------------------------------
+
+def _norm(v: str) -> str:
+    """Normalize a string for comparison (strip + lowercase)."""
+    return (v or "").strip().lower()
+
+
+def _filter_skillmatrix_metrics(metrics_text: str) -> str:
+    """
+    Strip the /metrics payload down to only the lines relevant
+    to the custom Skill Matrix metrics we care about.
+
+    This massively reduces the size before Prometheus parses it.
+    """
+    relevant_names = (
+        "proficiency_by_user_initiative",
+        "proficiency_by_user_initiative_combined",
+        "proficiency_by_user_epic",
+        "submitter_experience_by_initiative",
+        "submitter_experience_by_epic",
+        "initiative_coverage",
+        "total_epic_team_count",
+        "total_epic_team_count_by_submitter",
+        "total_initiative_count_by_submitter",
+    )
+
+    lines_out: List[str] = []
+    for line in metrics_text.splitlines():
+        # Keep HELP/TYPE lines for relevant metrics
+        if line.startswith("# HELP") or line.startswith("# TYPE"):
+            if any(name in line for name in relevant_names):
+                lines_out.append(line)
+            continue
+
+        # Keep sample lines that start with one of our metric names
+        if any(line.startswith(name) for name in relevant_names):
+            lines_out.append(line)
+
+    return "\n".join(lines_out)
+
+
+# -------------------------------------------------------------------
 # MCP server definition
 # -------------------------------------------------------------------
 
@@ -337,31 +380,42 @@ async def find_changelist_streams(changelists: list[int]) -> Dict[str, Any]:
 # -------------------------------------------------------------------
 
 @mcp.tool()
-async def get_sprint_metrics(sprint_name: str) -> Dict[str, Any]:
+async def get_sprint_metrics(
+    sprint_id: str | None = None,
+    sprint_name: str | None = None,
+) -> Dict[str, Any]:
     """
     Get metrics for a sprint from SprintInsights.
+
+    You can pass either sprint_id (preferred) or sprint_name.
     """
-    url = f"{SPRINT_INSIGHTS_BASE_URL}/api/sprint-summary/"
+    if not sprint_id and not sprint_name:
+        return {
+            "ok": False,
+            "error": "You must provide sprint_id or sprint_name",
+        }
+
+    url = f"{SPRINT_INSIGHTS_BASE_URL}/tasks/api/sprint-summary/"
+    params: Dict[str, str] = {}
+    if sprint_id:
+        params["sprint_id"] = sprint_id
+    if sprint_name:
+        params["sprint_name"] = sprint_name
 
     try:
         async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
-            resp = await client.get(url, params={"sprint_name": sprint_name})
+            resp = await client.get(url, params=params)
+
             if resp.status_code == 404:
                 return {
                     "ok": False,
-                    "error": f"Sprint not found in SprintInsights: {sprint_name}",
+                    "error": f"Sprint or endpoint not found (status=404, body={resp.text!r})",
                 }
 
             resp.raise_for_status()
-            return {
-                "ok": True,
-                "data": resp.json(),
-            }
+            return {"ok": True, "data": resp.json()}
     except Exception as e:
-        return {
-            "ok": False,
-            "error": f"SprintInsights call failed: {e}",
-        }
+        return {"ok": False, "error": f"SprintInsights call failed: {e}"}
 
 
 # -------------------------------------------------------------------
@@ -373,7 +427,6 @@ async def get_active_jira_sprints() -> Dict[str, Any]:
     """
     List active Jira sprints (as known by the Jira tasks service).
     """
-    # ✅ include /tasks/ prefix to match Django
     url = f"{SPRINT_INSIGHTS_BASE_URL}/tasks/api/active-sprints/"
 
     try:
@@ -403,7 +456,6 @@ async def get_jira_sprint_tasks(sprint_id: str, status_filter: str = "") -> Dict
     """
     Get tasks for a given Jira sprint from the Jira tasks service.
     """
-    # ✅ include /tasks/ prefix here as well
     url = f"{SPRINT_INSIGHTS_BASE_URL}/tasks/api/sprint-tasks/"
     params = {"sprint_id": sprint_id}
     if status_filter:
@@ -431,21 +483,8 @@ async def get_jira_sprint_tasks(sprint_id: str, status_filter: str = "") -> Dict
 async def get_user_sprint_tasks(sprint_id: str, user_name: str, status_filter: str = "") -> Dict[str, Any]:
     """
     Get all tasks and summary stats for a given user in a given sprint.
-
-    Args:
-        sprint_id: Jira sprint id (as string).
-        user_name: Display name / username as stored in Task.user.username.
-        status_filter: Optional comma-separated list of statuses
-                       (e.g. "IN PROGRESS,CLOSED").
-
-    Returns:
-        {
-          "ok": True/False,
-          "data": { ... } or None,
-          "error": "message" (optional)
-        }
     """
-    url = f"{SPRINT_INSIGHTS_BASE_URL}/api/sprint-user-tasks/"
+    url = f"{SPRINT_INSIGHTS_BASE_URL}/tasks/api/sprint-user-tasks/"
     params = {"sprint_id": sprint_id, "user": user_name}
     if status_filter:
         params["status"] = status_filter
@@ -474,26 +513,8 @@ async def get_user_sprint_hours(sprint_id: str, user_name: str,) -> Dict[str, An
     Get a summary of estimated hours for a user in a sprint.
 
     Uses Task.story_points as hours (your existing convention).
-
-    Returns:
-        {
-          "ok": True/False,
-          "data": {
-            "sprint_id": "...",
-            "sprint_name": "...",
-            "user": "...",
-            "total_estimated_hours": ...,
-            "completed_estimated_hours": ...,
-            "open_estimated_hours": ...,
-            "total_tasks": ...,
-            "completed_tasks": ...,
-            "open_tasks": ...,
-            "unestimated_tasks": ...
-          } or None,
-          "error": "message" (optional)
-        }
     """
-    url = f"{SPRINT_INSIGHTS_BASE_URL}/api/sprint-user-tasks/"
+    url = f"{SPRINT_INSIGHTS_BASE_URL}/tasks/api/sprint-user-tasks/"
     params = {"sprint_id": sprint_id, "user": user_name}
 
     try:
@@ -507,7 +528,6 @@ async def get_user_sprint_hours(sprint_id: str, user_name: str,) -> Dict[str, An
 
             resp.raise_for_status()
             full = resp.json()
-            # pick out just the summary fields
             summary = {
                 "sprint_id": full.get("sprint_id"),
                 "sprint_name": full.get("sprint_name"),
@@ -532,24 +552,8 @@ async def get_user_sprint_hours(sprint_id: str, user_name: str,) -> Dict[str, An
 async def search_jira_tasks(query: str, sprint_id: str = "", user_name: str = "", status_filter: str = "",) -> Dict[str, Any]:
     """
     Search Jira tasks across sprints using the Jira tasks service database.
-
-    Args:
-        query: Free-text search term (issue key, title, sprint name, fix version, product year).
-        sprint_id: Optional Sprint.sprint_id filter.
-        user_name: Optional user name filter (contains match).
-        status_filter: Optional comma-separated statuses, e.g. "IN PROGRESS,CLOSED".
-
-    Returns:
-        {
-          "ok": True/False,
-          "data": {
-            "total": N,
-            "tasks": [ ... ]
-          } or None,
-          "error": "message" (optional)
-        }
     """
-    url = f"{SPRINT_INSIGHTS_BASE_URL}/api/search-tasks/"
+    url = f"{SPRINT_INSIGHTS_BASE_URL}/tasks/api/search-tasks/"
     params = {"q": query}
     if sprint_id:
         params["sprint_id"] = sprint_id
@@ -576,33 +580,33 @@ async def search_jira_tasks(query: str, sprint_id: str = "", user_name: str = ""
         }
 
 
+# -------------------------------------------------------------------
+# Skill Matrix tools
+# -------------------------------------------------------------------
+
 @mcp.tool()
 async def get_skill_matrix_metrics_raw() -> Dict[str, Any]:
     """
-    Get the raw Prometheus metrics text from the Skill Matrix service.
-
-    Useful for debugging or ad-hoc inspection.
+    Return the full /metrics text for Skill Matrix (debug only).
     """
     url = f"{SKILL_MATRIX_BASE_URL}/metrics"
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.get(url)
+            print(
+                "[SkillMatrix] GET", url,
+                "status=", resp.status_code,
+                "len=", len(resp.text),
+            )
             if resp.status_code == 404:
-                return {
-                    "ok": False,
-                    "error": "Skill Matrix /metrics endpoint not found",
-                }
+                return {"ok": False, "error": "Skill Matrix /metrics endpoint not found"}
             resp.raise_for_status()
-            return {
-                "ok": True,
-                "data": resp.text,
-            }
+            print("[SkillMatrix] first line:", resp.text.splitlines()[0:3])
+            return {"ok": True, "data": resp.text}
     except Exception as e:
-        return {
-            "ok": False,
-            "error": f"Skill Matrix /metrics call failed: {e}",
-        }
+        print("[SkillMatrix] ERROR calling /metrics:", repr(e))
+        return {"ok": False, "error": f"Skill Matrix /metrics call failed: {e}"}
 
 
 @mcp.tool()
@@ -620,12 +624,15 @@ async def get_submitter_skill_profile(submitter: str) -> Dict[str, Any]:
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.get(metrics_url)
             resp.raise_for_status()
-            metrics_text = resp.text
+            full_text = resp.text
     except Exception as e:
         return {
             "ok": False,
             "error": f"Failed to fetch Skill Matrix metrics: {e}",
         }
+
+    # Filter down to just the relevant custom metrics
+    metrics_text = _filter_skillmatrix_metrics(full_text)
 
     by_initiative: List[Dict[str, Any]] = []
     by_epic: List[Dict[str, Any]] = []
@@ -640,7 +647,7 @@ async def get_submitter_skill_profile(submitter: str) -> Dict[str, Any]:
                         by_initiative.append({
                             "initiative": labels.get("initiative"),
                             "epic_team": labels.get("epic_team"),
-                            "proficiency_level": sample.value,  # 0-4 from your thresholds
+                            "proficiency_level": sample.value,
                         })
 
             # proficiency_by_user_epic
@@ -685,16 +692,18 @@ async def get_initiative_coverage(initiative: str, epic_team: str = "") -> Dict[
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.get(metrics_url)
             resp.raise_for_status()
-            metrics_text = resp.text
+            full_text = resp.text
     except Exception as e:
         return {
             "ok": False,
             "error": f"Failed to fetch Skill Matrix metrics: {e}",
         }
 
+    metrics_text = _filter_skillmatrix_metrics(full_text)
+
     total_submitters_by_team: Dict[str, float] = {}
     coverage_pct_by_submitter: List[Dict[str, Any]] = []
-    normalized_initiative = initiative.strip()
+    target_norm = _norm(initiative)
 
     try:
         for family in text_string_to_metric_families(metrics_text):
@@ -702,7 +711,7 @@ async def get_initiative_coverage(initiative: str, epic_team: str = "") -> Dict[
             if family.name == "submitter_experience_by_initiative":
                 for sample in family.samples:
                     labels = sample.labels
-                    if labels.get("initiative") != normalized_initiative:
+                    if _norm(labels.get("initiative")) != target_norm:
                         continue
 
                     team = labels.get("epic_team")
@@ -715,7 +724,7 @@ async def get_initiative_coverage(initiative: str, epic_team: str = "") -> Dict[
             if family.name == "initiative_coverage":
                 for sample in family.samples:
                     labels = sample.labels
-                    if labels.get("initiative") != normalized_initiative:
+                    if _norm(labels.get("initiative")) != target_norm:
                         continue
 
                     team = labels.get("epic_team")
@@ -732,7 +741,7 @@ async def get_initiative_coverage(initiative: str, epic_team: str = "") -> Dict[
         return {
             "ok": True,
             "data": {
-                "initiative": normalized_initiative,
+                "initiative": initiative,
                 "total_submitters_by_team": total_submitters_by_team,
                 "coverage_by_submitter": coverage_pct_by_submitter,
             },
@@ -745,7 +754,7 @@ async def get_initiative_coverage(initiative: str, epic_team: str = "") -> Dict[
 
 
 @mcp.tool()
-async def find_best_submitters_for_initiative( initiative: str, min_level: int = 3) -> Dict[str, Any]:
+async def find_best_submitters_for_initiative(initiative: str, min_level: int = 3) -> Dict[str, Any]:
     """
     Find submitters with proficiency >= min_level for a given initiative
     across all epic teams.
@@ -758,14 +767,16 @@ async def find_best_submitters_for_initiative( initiative: str, min_level: int =
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.get(metrics_url)
             resp.raise_for_status()
-            metrics_text = resp.text
+            full_text = resp.text
     except Exception as e:
         return {
             "ok": False,
             "error": f"Failed to fetch Skill Matrix metrics: {e}",
         }
 
-    normalized_initiative = initiative.strip()
+    metrics_text = _filter_skillmatrix_metrics(full_text)
+
+    target_norm = _norm(initiative)
     candidates: List[Dict[str, Any]] = []
 
     try:
@@ -775,7 +786,7 @@ async def find_best_submitters_for_initiative( initiative: str, min_level: int =
 
             for sample in family.samples:
                 labels = sample.labels
-                if labels.get("initiative") != normalized_initiative:
+                if _norm(labels.get("initiative")) != target_norm:
                     continue
 
                 level = sample.value
@@ -793,7 +804,7 @@ async def find_best_submitters_for_initiative( initiative: str, min_level: int =
         return {
             "ok": True,
             "data": {
-                "initiative": normalized_initiative,
+                "initiative": initiative,
                 "min_level": min_level,
                 "candidates": candidates,
             },
@@ -820,12 +831,14 @@ async def get_epic_expertise(epic: str) -> Dict[str, Any]:
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.get(metrics_url)
             resp.raise_for_status()
-            metrics_text = resp.text
+            full_text = resp.text
     except Exception as e:
         return {
             "ok": False,
             "error": f"Failed to fetch Skill Matrix metrics: {e}",
         }
+
+    metrics_text = _filter_skillmatrix_metrics(full_text)
 
     target_epic = epic or "Unknown"
     submitter_count = 0
@@ -865,6 +878,11 @@ async def get_epic_expertise(epic: str) -> Dict[str, Any]:
             "error": f"Error parsing epic expertise metrics: {e}",
         }
 
+
+# -------------------------------------------------------------------
+# Swarm metrics tools
+# -------------------------------------------------------------------
+
 @mcp.tool()
 async def get_swarm_metrics_raw() -> Dict[str, Any]:
     """
@@ -872,7 +890,6 @@ async def get_swarm_metrics_raw() -> Dict[str, Any]:
 
     Useful for debugging or ad-hoc inspection.
     """
-    # your Swarm app exposes metrics at /metrics/
     url = f"{SWARM_METRICS_BASE_URL}/metrics/"
 
     try:
@@ -885,19 +902,11 @@ async def get_swarm_metrics_raw() -> Dict[str, Any]:
     except Exception as e:
         return {"ok": False, "error": f"Swarm metrics call failed: {e}"}
 
+
 @mcp.tool()
 async def get_swarm_group_summary(group: str) -> Dict[str, Any]:
     """
     Get a summary of Swarm review metrics for a given group.
-
-    Includes:
-      - engagement rate
-      - time to first vote
-      - vote-up duration
-      - total reviews
-      - avg review duration
-      - engagement counts
-      - needsReview count
     """
     metrics_url = f"{SWARM_METRICS_BASE_URL}/metrics/"
 
@@ -956,6 +965,7 @@ async def get_swarm_group_summary(group: str) -> Dict[str, Any]:
     except Exception as e:
         return {"ok": False, "error": f"Error parsing Swarm metrics: {e}"}
 
+
 @mcp.tool()
 async def get_swarm_group_top_contributors(group: str, limit: int = 5) -> Dict[str, Any]:
     """
@@ -1004,18 +1014,11 @@ async def get_swarm_group_top_contributors(group: str, limit: int = 5) -> Dict[s
     except Exception as e:
         return {"ok": False, "error": f"Error parsing top contributors: {e}"}
 
+
 @mcp.tool()
 async def get_swarm_group_daily_snapshot(group: str) -> Dict[str, Any]:
     """
     Get today's Swarm review metrics for a group (daily gauges).
-
-    Includes today's:
-      - engagement rate
-      - time to first vote
-      - vote-up duration
-      - total reviews
-      - avg review duration
-      - needsReview count
     """
     metrics_url = f"{SWARM_METRICS_BASE_URL}/metrics/"
 
@@ -1065,42 +1068,11 @@ async def get_swarm_group_daily_snapshot(group: str) -> Dict[str, Any]:
     except Exception as e:
         return {"ok": False, "error": f"Error parsing Swarm daily metrics: {e}"}
 
+
 @mcp.tool()
-async def get_swarm_group_history(
-    group: str,
-    start_date: str,
-    end_date: str,
-) -> Dict[str, Any]:
+async def get_swarm_group_history(group: str, start_date: str, end_date: str,) -> Dict[str, Any]:
     """
     Get per-day Swarm metrics for a group between start_date and end_date.
-
-    Args:
-        group: Swarm group name (e.g. "2A-Franchise-Gameplay").
-        start_date: Start date in YYYY-MM-DD.
-        end_date: End date in YYYY-MM-DD.
-
-    Returns:
-        {
-          "ok": True/False,
-          "data": {
-            "group": "...",
-            "start": "YYYY-MM-DD",
-            "end": "YYYY-MM-DD",
-            "days": [
-              {
-                "date": "YYYY-MM-DD",
-                "engagement_rate": ...,
-                "average_time_to_first_vote": ...,
-                "average_vote_up_duration": ...,
-                "total_reviews": ...,
-                "average_review_duration": ...,
-                "needs_review_count": ...
-              },
-              ...
-            ]
-          } or None,
-          "error": "message" (optional)
-        }
     """
     url = f"{SWARM_METRICS_BASE_URL}/api/group-metrics-range/"
     params = {
@@ -1113,7 +1085,6 @@ async def get_swarm_group_history(
         async with httpx.AsyncClient(timeout=60.0, verify=False) as client:
             resp = await client.get(url, params=params)
             if resp.status_code == 400:
-                # Bad input from caller
                 return {
                     "ok": False,
                     "error": f"Bad request to Swarm app: {resp.text}",
@@ -1135,17 +1106,11 @@ async def get_swarm_group_history(
             "error": f"Swarm date-range metrics call failed: {e}",
         }
 
+
 # -------------------------------------------------------------------
 # ASGI app for uvicorn / K8s (SSE MCP)
 # -------------------------------------------------------------------
 
-# This exposes an SSE MCP server with:
-#   - SSE endpoint at /sse
-#   - Messages endpoint at /messages/
-#   - Health check at /healthz
 app = mcp.sse_app()
-# In this FastMCP version, sse_app() defaults to /sse and /messages/
-# We don't pass path/message_path to avoid version mismatch issues.
-
 # For local dev:
 #   uvicorn server:app --host 0.0.0.0 --port 8000
