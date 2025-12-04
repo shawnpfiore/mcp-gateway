@@ -2,10 +2,11 @@ import os
 from typing import Dict, Any, List
 
 import httpx
-from mcp.server.fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from prometheus_client.parser import text_string_to_metric_families
+from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 # -------------------------------------------------------------------
 # Config from environment
@@ -20,6 +21,20 @@ SKILL_MATRIX_BASE_URL = os.getenv(
 SWARM_METRICS_BASE_URL = os.getenv(
     "SWARM_METRICS_BASE_URL",
     "http://thehiveapp-app.ea.svc.cluster.local:5020",
+)
+
+
+security = TransportSecuritySettings(
+    enable_dns_rebinding_protection=True,
+    allowed_hosts=[
+        "thehive.tib.ad.ea.com",
+        "thehive.tib.ad.ea.com:443",
+        "localhost",
+        "127.0.0.1",
+    ],
+    allowed_origins=[
+        "https://thehive.tib.ad.ea.com",
+    ],
 )
 
 # -------------------------------------------------------------------
@@ -75,6 +90,8 @@ mcp = FastMCP(
     "Gameplay MCP Gateway",
     json_response=True,
     stateless_http=True,
+    transport_security=security,  # or whatever the kwarg is in your version (check docs)
+
 )
 
 
@@ -307,6 +324,10 @@ async def get_sprint_metrics(
     """
     Get metrics for a sprint from SprintInsights.
 
+    Works for any sprint that Jira knows about (past, active, or future)
+    when using sprint_id, because the tasks service will fetch/create that
+    sprint from Jira on demand.
+
     You can pass either sprint_id (preferred) or sprint_name.
     """
     if not sprint_id and not sprint_name:
@@ -345,7 +366,7 @@ async def get_sprint_metrics(
 @mcp.tool()
 async def get_active_jira_sprints() -> Dict[str, Any]:
     """
-    List active Jira sprints (as known by the Jira tasks service).
+    List *active* Jira sprints (as known by the Jira tasks service).
     """
     url = f"{SPRINT_INSIGHTS_BASE_URL}/tasks/api/active-sprints/"
 
@@ -367,6 +388,36 @@ async def get_active_jira_sprints() -> Dict[str, Any]:
         }
 
 
+# NEW: list future Jira sprints (requires /tasks/api/future-sprints/ on SprintInsights)
+@mcp.tool()
+async def get_future_jira_sprints() -> Dict[str, Any]:
+    """
+    List *future* Jira sprints (as known by the Jira tasks service).
+
+    This is a convenience wrapper around /tasks/api/future-sprints/,
+    useful for letting the agent discover upcoming sprints that users
+    might want to ask about.
+    """
+    url = f"{SPRINT_INSIGHTS_BASE_URL}/tasks/api/future-sprints/"
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+            resp = await client.get(url)
+            if resp.status_code == 404:
+                return {
+                    "ok": False,
+                    "error": "future-sprints endpoint not found on Jira tasks service",
+                }
+
+            resp.raise_for_status()
+            return {"ok": True, "data": resp.json()}
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": f"future-sprints call failed: {e}",
+        }
+
+
 # -------------------------------------------------------------------
 # MCP TOOL I — get tasks for a Jira sprint
 # -------------------------------------------------------------------
@@ -379,6 +430,10 @@ async def get_jira_sprint_tasks(
 ) -> Dict[str, Any]:
     """
     Get tasks for a given Jira sprint from the Jira tasks service.
+
+    This works for past, active, and *future* sprints as long as the
+    sprint_id is valid in Jira; the tasks service will pull the sprint
+    from Jira and sync tasks on demand.
 
     limit: max number of tasks to return (default 200, max enforced server-side)
     """
@@ -414,6 +469,9 @@ async def get_user_sprint_tasks(
 ) -> Dict[str, Any]:
     """
     Get all tasks and summary stats for a given user in a given sprint.
+
+    Like get_jira_sprint_tasks, this works for any sprint (past, active,
+    or future) as long as Jira knows the sprint_id.
     """
     url = f"{SPRINT_INSIGHTS_BASE_URL}/tasks/api/sprint-user-tasks/"
     params: Dict[str, str] = {
@@ -448,6 +506,9 @@ async def get_user_sprint_hours(sprint_id: str, user_name: str) -> Dict[str, Any
     Get a summary of estimated hours for a user in a sprint.
 
     Uses Task.story_points as hours (your existing convention).
+
+    Works for any sprint id (past/active/future) as long as Jira
+    recognizes the sprint_id.
     """
     url = f"{SPRINT_INSIGHTS_BASE_URL}/tasks/api/sprint-user-tasks/"
     # Only need summary, not the full tasks list: ask for 1 row max
@@ -1039,8 +1100,13 @@ async def get_swarm_group_history(group: str, start_date: str, end_date: str) ->
 
 
 # -------------------------------------------------------------------
-# ASGI app for uvicorn / K8s (SSE MCP)
+# ASGI app for uvicorn / K8s / Docker (SSE MCP)
 # -------------------------------------------------------------------
+
+# You can still set ALLOWED_HOSTS / MCP_AUTH_TOKEN in env for future use,
+# but this FastMCP version does not accept them as sse_app() kwargs.
+ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "")
+MCP_AUTH_TOKEN = os.getenv("MCP_AUTH_TOKEN")
 
 app = mcp.sse_app()
 # For local dev:

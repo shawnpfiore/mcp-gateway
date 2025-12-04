@@ -22,7 +22,7 @@ env:
   - name: SKILL_MATRIX_BASE_URL
     value: "http://maddenskillmatrix-app.ea.svc.cluster.local:9100"
   - name: SWARM_METRICS_BASE_URL
-    value: "http://swarmmetrics-app.ea.svc.cluster.local:8000"
+    value: "http://thehiveapp-app.ea.svc.cluster.local:5020"
   - name: MCP_AUTH_TOKEN
     valueFrom:
       secretKeyRef:
