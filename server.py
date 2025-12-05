@@ -318,6 +318,79 @@ async def find_changelist_streams(changelists: list[int]) -> Dict[str, Any]:
             "error": f"changelists-streams call failed: {e}",
         }
 
+@mcp.tool()
+async def get_last_p4_user_commit(
+    stream: str,
+    user: str,
+) -> Dict[str, Any]:
+    """
+    Get the latest Perforce changelist for a given user in a given stream.
+
+    Args:
+      stream: Perforce depot path, e.g. "//Game/Madden/26/DL"
+      user: P4 username, e.g. "dusmith" or "TIBURON-DOMAIN\\dusmith".
+            If the domain is omitted, the P4Diff app assumes "TIBURON-DOMAIN\\".
+
+    Returns:
+      {
+        "ok": True/False,
+        "data": {
+          "stream": "...",
+          "user": "TIBURON-DOMAIN\\dusmith",
+          "found": true/false,
+          "latest_changelist": {
+            "cl_num": 1234567,
+            "p4_user": "TIBURON-DOMAIN\\dusmith",
+            "commit_date_time": "...",
+            "description": "...",
+            "jira_issues": [...],
+            "jira_urls": [
+              "https://jaas.ea.com/browse/AMFB-123456",
+              ...
+            ],
+            "swarm_links": [...],
+            "qv_links": [...],
+            "tags": [...],
+            "title": [...],
+            "files": [
+              {"file_path": "...", "revision": 3, "digest": "..."},
+              ...
+            ],
+          }
+        } or None,
+        "error": "..." (optional)
+      }
+    """
+    url = f"{P4DIFF_BASE_URL}/api/stream-user-last-changelist/"
+    params = {
+        "stream": stream,
+        "user": user,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+            resp = await client.get(url, params=params)
+
+            if resp.status_code == 404:
+                # Either stream not found, or P4Diff returned explicit 404
+                return {
+                    "ok": False,
+                    "error": f"Stream or endpoint not found (status=404, body={resp.text!r})",
+                }
+
+            resp.raise_for_status()
+            data = resp.json()
+
+            # data["found"] already tells you whether that user has any CLs in the stream
+            return {
+                "ok": True,
+                "data": data,
+            }
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": f"stream-user-last-changelist call failed: {e}",
+        }
 
 # -------------------------------------------------------------------
 # MCP TOOL G — SprintInsights metrics
