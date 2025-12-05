@@ -27,12 +27,19 @@ SWARM_METRICS_BASE_URL = os.getenv(
 security = TransportSecuritySettings(
     enable_dns_rebinding_protection=True,
     allowed_hosts=[
+        # Docker / local dev
+        "localhost",
+        "localhost:8800",
+        "127.0.0.1",
+        "127.0.0.1:8800",
+
+        # Kubernetes / Traefik
         "thehive.tib.ad.ea.com",
         "thehive.tib.ad.ea.com:443",
-        "localhost",
-        "127.0.0.1",
     ],
     allowed_origins=[
+        "http://localhost:8800",
+        "http://127.0.0.1:8800",
         "https://thehive.tib.ad.ea.com",
     ],
 )
@@ -587,6 +594,72 @@ async def search_jira_tasks(
             "error": f"search-tasks call failed: {e}",
         }
 
+@mcp.tool()
+async def get_user_logged_hours_for_sprint(
+    sprint_id: str,
+    user_name: str,
+    limit: int = 200,
+) -> Dict[str, Any]:
+    """
+    For a given Jira sprint and user, return whether they have logged hours
+    on their tasks, plus per-task details.
+
+    This calls the SprintInsights endpoint:
+      /tasks/api/sprint-user-logged-hours/
+
+    Returns:
+      {
+        "ok": True/False,
+        "data": {
+          "sprint_id": "...",
+          "sprint_name": "...",
+          "user": "...",
+          "total_logged_hours": float,
+          "total_tasks": int,
+          "returned_tasks": int,
+          "tasks": [
+            {
+              "issue_key": "...",
+              "title": "...",
+              "status": "...",
+              "story_points": float|None,   # estimate (hours)
+              "logged_hours": float,        # actual logged (hours)
+              "has_logged_hours": bool,
+            },
+            ...
+          ]
+        } or None,
+        "error": "..." (optional)
+      }
+    """
+    url = f"{SPRINT_INSIGHTS_BASE_URL}/tasks/api/sprint-user-logged-hours/"
+    params: Dict[str, str] = {
+        "sprint_id": sprint_id,
+        "user": user_name,
+        "limit": str(limit),
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0, verify=False) as client:
+            resp = await client.get(url, params=params)
+            if resp.status_code == 404:
+                return {
+                    "ok": False,
+                    "error": f"Sprint {sprint_id} or user {user_name} not found",
+                }
+            if resp.status_code == 400:
+                return {
+                    "ok": False,
+                    "error": f"Bad request: {resp.text}",
+                }
+
+            resp.raise_for_status()
+            return {"ok": True, "data": resp.json()}
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": f"sprint-user-logged-hours call failed: {e}",
+        }
 
 # -------------------------------------------------------------------
 # Skill Matrix tools
