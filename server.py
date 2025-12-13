@@ -23,26 +23,40 @@ SWARM_METRICS_BASE_URL = os.getenv(
     "http://thehiveapp-app.ea.svc.cluster.local:5020",
 )
 
+FOOTBALL_LESSON_SYNC_BASE_URL = os.getenv(
+    "FOOTBALL_LESSON_SYNC_BASE_URL",
+    "http://football-lesson-generator-football-lesson-generator-api.ea.svc.cluster.local:9101",
+)
 
 security = TransportSecuritySettings(
     enable_dns_rebinding_protection=True,
+
     allowed_hosts=[
-        # Docker / local dev
+        # Local dev (if you run the MCP server locally)
         "localhost",
         "localhost:8800",
         "127.0.0.1",
         "127.0.0.1:8800",
 
-        # Kubernetes / Traefik
+        # Public ingress host that clients use to reach the MCP gateway
         "thehive.tib.ad.ea.com",
         "thehive.tib.ad.ea.com:443",
+
+        # In-cluster service DNS (ONLY needed if your MCP lib validates outbound hosts too)
+        "football-lessons-football-lesson-generator-api.ea.svc.cluster.local",
+        "football-lessons-football-lesson-generator-api.ea.svc.cluster.local:9101",
     ],
+
     allowed_origins=[
+        # Local UI origins
         "http://localhost:8800",
         "http://127.0.0.1:8800",
+
+        # Prod UI origin
         "https://thehive.tib.ad.ea.com",
     ],
 )
+
 
 # -------------------------------------------------------------------
 # Helper functions for Skill Matrix metrics
@@ -318,10 +332,11 @@ async def find_changelist_streams(changelists: list[int]) -> Dict[str, Any]:
             "error": f"changelists-streams call failed: {e}",
         }
 
+
 @mcp.tool()
 async def get_last_p4_user_commit(
-    stream: str,
-    user: str,
+        stream: str,
+        user: str,
 ) -> Dict[str, Any]:
     """
     Get the latest Perforce changelist for a given user in a given stream.
@@ -392,14 +407,15 @@ async def get_last_p4_user_commit(
             "error": f"stream-user-last-changelist call failed: {e}",
         }
 
+
 # -------------------------------------------------------------------
 # MCP TOOL G — SprintInsights metrics
 # -------------------------------------------------------------------
 
 @mcp.tool()
 async def get_sprint_metrics(
-    sprint_id: str | None = None,
-    sprint_name: str | None = None,
+        sprint_id: str | None = None,
+        sprint_name: str | None = None,
 ) -> Dict[str, Any]:
     """
     Get metrics for a sprint from SprintInsights.
@@ -504,9 +520,9 @@ async def get_future_jira_sprints() -> Dict[str, Any]:
 
 @mcp.tool()
 async def get_jira_sprint_tasks(
-    sprint_id: str,
-    status_filter: str = "",
-    limit: int = 200,
+        sprint_id: str,
+        status_filter: str = "",
+        limit: int = 200,
 ) -> Dict[str, Any]:
     """
     Get tasks for a given Jira sprint from the Jira tasks service.
@@ -542,10 +558,10 @@ async def get_jira_sprint_tasks(
 
 @mcp.tool()
 async def get_user_sprint_tasks(
-    sprint_id: str,
-    user_name: str,
-    status_filter: str = "",
-    limit: int = 200,
+        sprint_id: str,
+        user_name: str,
+        status_filter: str = "",
+        limit: int = 200,
 ) -> Dict[str, Any]:
     """
     Get all tasks and summary stats for a given user in a given sprint.
@@ -627,12 +643,12 @@ async def get_user_sprint_hours(sprint_id: str, user_name: str) -> Dict[str, Any
 
 @mcp.tool()
 async def search_jira_tasks(
-    query: str,
-    sprint_id: str = "",
-    user_name: str = "",
-    status_filter: str = "",
-    limit: int = 200,
-    offset: int = 0,
+        query: str,
+        sprint_id: str = "",
+        user_name: str = "",
+        status_filter: str = "",
+        limit: int = 200,
+        offset: int = 0,
 ) -> Dict[str, Any]:
     """
     Search Jira tasks across sprints using the Jira tasks service database.
@@ -667,11 +683,12 @@ async def search_jira_tasks(
             "error": f"search-tasks call failed: {e}",
         }
 
+
 @mcp.tool()
 async def get_user_logged_hours_for_sprint(
-    sprint_id: str,
-    user_name: str,
-    limit: int = 200,
+        sprint_id: str,
+        user_name: str,
+        limit: int = 200,
 ) -> Dict[str, Any]:
     """
     For a given Jira sprint and user, return whether they have logged hours
@@ -733,6 +750,7 @@ async def get_user_logged_hours_for_sprint(
             "ok": False,
             "error": f"sprint-user-logged-hours call failed: {e}",
         }
+
 
 # -------------------------------------------------------------------
 # Skill Matrix tools
@@ -1245,7 +1263,95 @@ async def get_swarm_group_history(group: str, start_date: str, end_date: str) ->
         }
 
 
-# -------------------------------------------------------------------
+@mcp.tool()
+async def sync_football_lessons(
+        attachment_filename: str = "",
+        sheet_tab_name: str = "",
+        sheet_gid: str = "",
+) -> Dict[str, Any]:
+    """
+    Trigger the Sheet → Confluence sync (football lessons) via the internal sync API.
+    """
+    url = f"{FOOTBALL_LESSON_SYNC_BASE_URL}/sync"
+    payload: Dict[str, Any] = {}
+
+    if attachment_filename:
+        payload["attachment_filename"] = attachment_filename
+    if sheet_tab_name:
+        payload["sheet_tab_name"] = sheet_tab_name
+    if sheet_gid:
+        payload["sheet_gid"] = sheet_gid
+
+    try:
+        async with httpx.AsyncClient(timeout=300.0, verify=False) as client:
+            resp = await client.post(url, json=payload)
+            # If your sync API returns 500 with JSON body, try to return it cleanly:
+            if resp.status_code >= 400:
+                return {"ok": False, "error": f"sync api error {resp.status_code}", "data": resp.json()}
+            return {"ok": True, "data": resp.json()}
+    except Exception as e:
+        return {"ok": False, "error": f"sync call failed: {e}"}
+
+
+@mcp.tool()
+async def get_football_lesson(
+        module_name: str,
+        section: str,
+) -> Dict[str, Any]:
+    """
+    Fetch a single lesson row from the Curriculum sheet by Module Name + Section.
+    Example: module_name="Football Basics / 101", section="1.1"
+    """
+    url = f"{FOOTBALL_LESSON_SYNC_BASE_URL}/lesson"
+    params = {"module_name": module_name, "section": section}
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+            resp = await client.get(url, params=params)
+            if resp.status_code >= 400:
+                # return server error payload if present
+                try:
+                    return {"ok": False, "error": f"lesson api error {resp.status_code}", "data": resp.json()}
+                except Exception:
+                    return {"ok": False, "error": f"lesson api error {resp.status_code}", "data": resp.text}
+            return {"ok": True, "data": resp.json()}
+    except Exception as e:
+        return {"ok": False, "error": f"lesson call failed: {e}"}
+
+
+@mcp.tool()
+async def list_football_lessons(
+        module_name: str = "",
+        section_prefix: str = "",
+        author: str = "",
+        limit: int = 200,
+) -> Dict[str, Any]:
+    """
+    List/filter lessons from the Curriculum sheet.
+    """
+    url = f"{FOOTBALL_LESSON_SYNC_BASE_URL}/lessons"
+    params = {
+        "module_name": module_name,
+        "section_prefix": section_prefix,
+        "author": author,
+        "limit": str(limit),
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+            resp = await client.get(url, params=params)
+            if resp.status_code >= 400:
+                try:
+                    return {"ok": False, "error": f"lessons api error {resp.status_code}", "data": resp.json()}
+                except Exception:
+                    return {"ok": False, "error": f"lessons api error {resp.status_code}", "data": resp.text}
+            return {"ok": True, "data": resp.json()}
+    except Exception as e:
+        return {"ok": False, "error": f"lessons call failed: {e}"}
+
+
+# ------
+# -------------------------------------------------------------
 # ASGI app for uvicorn / K8s / Docker (SSE MCP)
 # -------------------------------------------------------------------
 
